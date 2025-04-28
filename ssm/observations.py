@@ -14,14 +14,17 @@ from ssm.preprocessing import interpolate_data
 from ssm.cstats import robust_ar_statistics
 from ssm.optimizers import adam, bfgs, rmsprop, sgd, lbfgs
 import ssm.stats as stats
+import ssm
 
 class Observations(object):
     # K = number of discrete states
     # D = number of observed dimensions
     # M = exogenous input dimensions (the inputs modulate the probability of discrete state transitions via a multiclass logistic regression)
 
-    def __init__(self, K, D, M=0):
+    def __init__(self, K, D, M=0, mus=None):
         self.K, self.D, self.M = K, D, M
+        self.mus = mus if mus is not None else npr.randn(K, D)
+        # print('mus are', self.mus)
 
     @property
     def params(self):
@@ -38,8 +41,18 @@ class Observations(object):
     def initialize(self, datas, inputs=None, masks=None, tags=None, init_method="random"):
         Ts = [data.shape[0] for data in datas]
 
-        # Get initial discrete states
-        if init_method.lower() == 'kmeans':
+        if init_method.lower() == 'pca_hmm':
+            cdatas = np.concatenate(datas)
+            print(cdatas.shape)
+            u, *_ = np.linalg.svd(cdatas, full_matrices=False)
+            u = u[:, 0].reshape(-1,1)
+            hmm = ssm.HMM(2, u.shape[1])
+            hmm.initialize(u, init_method="kmeans")
+            print('hmm over the pc1 to get the `zs`')
+            hmm.fit(u, method="em", num_em_iters=100, init_method="kmeans")
+            zs = [hmm.most_likely_states(u)]
+
+        elif init_method.lower() == 'kmeans':
             # KMeans clustering
             from sklearn.cluster import KMeans
             km = KMeans(self.K)
@@ -49,7 +62,7 @@ class Observations(object):
         elif init_method.lower() =='random':
             # Random assignment
             zs = [npr.choice(self.K, size=T) for T in Ts]
-
+            
         else:
             raise Exception('Not an accepted initialization type: {}'.format(init_method))
 
@@ -207,8 +220,9 @@ class ExponentialObservations(Observations):
 class DiagonalGaussianObservations(Observations):
     def __init__(self, K, D, M=0):
         super(DiagonalGaussianObservations, self).__init__(K, D, M)
-        self.mus = npr.randn(K, D)
+        # self.mus = npr.randn(K, D)
         self._log_sigmasq = -2 + npr.randn(K, D)
+        print(self.mus)
 
     @property
     def sigmasq(self):
